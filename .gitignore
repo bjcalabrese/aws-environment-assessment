@@ -1,0 +1,6 @@
+*.xlsx
+*.pyc
+__pycache__/
+.env
+test_env_manifest.json.destroyed
+*.log
