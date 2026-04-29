@@ -1,115 +1,239 @@
 # AWS Environment Assessment Tool
 
-RVTools-equivalent for AWS. Connects to your AWS account and produces a multi-sheet Excel workbook inventorying every major workload type — colour-coded for backup gaps, encryption posture, and risk findings.
+A read-only AWS inventory tool that scans your account and produces a single Excel workbook covering every major workload type. Think of it as RVTools — but for AWS.
 
-## What it collects
+The output is a colour-coded, multi-sheet spreadsheet your team can use to understand what's running, what's at risk, and how much storage needs to be protected.
 
-| Sheet | Service |
-|---|---|
-| EC2 Instances | Instance type, storage, OS, tags, state |
-| EBS Volumes | Type, size, IOPS, encryption, attachment |
-| EBS Snapshots | All account-owned snapshots |
-| RDS & Aurora | Engine, storage, backup retention, Multi-AZ |
-| S3 Buckets | Size, object count, versioning, encryption, public access |
-| EFS | Size (Standard + IA), throughput mode |
-| FSx | Windows, Lustre, ONTAP, OpenZFS |
-| DynamoDB | Size, PITR status, billing mode |
-| Redshift | Clusters + Serverless, backup retention |
-| EKS | Clusters, node groups, node counts |
-| ECS | Clusters, running tasks, capacity providers |
-| Lambda | Runtime, memory, package size |
-| WorkSpaces | Users, volume sizes, compute type |
-| DocumentDB | Clusters, storage, backup retention |
-| ElastiCache | Redis/Memcached, backup retention |
-| AWS Backup Vaults | Recovery points, lock (WORM) status |
-| AWS Backup Plans | Schedules, retention, cross-region copy |
+---
 
-## Dashboard (Summary sheet)
+## How it works
 
-- **KPI tiles** — total resources, total storage, EC2/RDS state, S3 object count, snapshot count  
-- **Workload inventory** — count, GiB, TiB, encryption % per service  
-- **Risk & Findings** — CRITICAL / HIGH / MEDIUM findings (unencrypted volumes, public buckets, missing backup tags, no PITR, etc.)  
-- **AWS Backup infrastructure** — vault count, locked vaults, recovery points, cross-region copy rules  
-- **Region distribution** — resource count per region with visual bar  
-- **Storage by service** — ranked GiB breakdown  
-- **EC2 state breakdown** — by state, instance type, OS  
+1. You point it at an AWS account using your existing AWS credentials
+2. It scans every enabled region in parallel (or just the ones you specify)
+3. It writes a single `.xlsx` file with one sheet per service type plus a summary dashboard
 
-## Colour coding
+The script is **100% read-only** — it only calls `Describe*`, `List*`, and `Get*` APIs. It makes no changes to your environment.
 
-- 🔴 **Red** — backup gap or security risk (public S3, unencrypted EBS, 0-day RDS retention)
-- 🟡 **Yellow** — warning (stopped instances, no versioning, unattached volumes)
-- 🟢 **Green** — protected
+---
 
-## Install
+## Prerequisites
+
+**Python 3.10 or later**
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## IAM Permissions
+**AWS credentials configured**
 
-Attach the AWS managed `ReadOnlyAccess` policy, or use the minimal policy in [QUICKSTART.md](QUICKSTART.md).
-
-## Usage
+The tool uses whatever credentials are already set up on your machine — the same ones the AWS CLI uses. If you can run `aws s3 ls`, you're ready.
 
 ```bash
-# Current region
+# Check your credentials are working
+aws sts get-caller-identity
+```
+
+You should see your Account ID, User ID, and ARN. If not, run `aws configure` first.
+
+---
+
+## Quickstart
+
+```bash
+# Scan your current region
 python aws_assessment.py
 
-# Specific regions
+# Scan specific regions
 python aws_assessment.py --regions us-east-1 us-west-2 eu-west-1
 
-# All enabled regions
+# Scan every enabled region in the account
 python aws_assessment.py --all-regions
+```
 
-# Named AWS CLI profile
-python aws_assessment.py --profile my-profile --all-regions
+The output file is saved in the current directory:
+```
+aws_assessment_<account-id>_<date>.xlsx
+```
 
-# Custom output filename
-python aws_assessment.py --output "CustomerName_$(date +%Y%m%d).xlsx"
+Open it in Excel or Google Sheets.
 
-# Skip snapshot enumeration (faster on large accounts)
+---
+
+## All options
+
+| Flag | Description | Example |
+|---|---|---|
+| `--regions` | One or more regions to scan | `--regions us-east-1 eu-west-1` |
+| `--all-regions` | Scan every enabled region | `--all-regions` |
+| `--profile` | AWS CLI profile name | `--profile customer-prod` |
+| `--output` | Custom output filename | `--output "Acme_2024.xlsx"` |
+| `--workers` | Parallel region workers (default: 4) | `--workers 8` |
+| `--skip-snapshots` | Skip EBS snapshot enumeration | `--skip-snapshots` |
+| `--verbose` | Show detailed logging | `--verbose` |
+
+### Common usage patterns
+
+```bash
+# Customer account using a named profile, all regions, custom filename
+python aws_assessment.py \
+  --profile customer-prod \
+  --all-regions \
+  --output "CustomerName_$(date +%Y%m%d).xlsx"
+
+# Large account — skip snapshots to speed up the scan
 python aws_assessment.py --all-regions --skip-snapshots
 
-# More parallel workers
+# Faster scan with more parallel workers
 python aws_assessment.py --all-regions --workers 8
+
+# Single region, verbose output to see what's happening
+python aws_assessment.py --regions us-east-1 --verbose
 ```
 
-## Test environment
+---
 
-Spin up realistic free-tier AWS resources to test the script against:
+## Setting up credentials for a customer account
+
+The cleanest approach is to create a named AWS CLI profile for each customer:
 
 ```bash
-# Always-free resources only (S3, DynamoDB, Lambda, ECS, SQS)
-python create_test_environment.py
+# Add a new profile
+aws configure --profile customer-name
+# Enter: Access Key ID, Secret Access Key, default region (e.g. us-east-1), output format (json)
 
-# Include EC2 t3.micro + RDS db.t3.micro (12-month free tier)
-python create_test_environment.py --include-compute
+# Verify it works
+aws sts get-caller-identity --profile customer-name
 
-# Tear everything down when done
-python destroy_test_environment.py
+# Run the assessment
+python aws_assessment.py --profile customer-name --all-regions
 ```
 
-## Generate a sample report (no AWS account needed)
-
+If the customer uses AWS SSO:
 ```bash
-python generate_sample_report.py
-# → SAMPLE_AWS_Assessment_ACMECorp.xlsx
+aws sso login --profile customer-name
+python aws_assessment.py --profile customer-name --all-regions
 ```
+
+---
+
+## IAM permissions required
+
+The tool only needs read-only access. The quickest option is to attach the AWS managed policy:
+
+```
+arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+If the customer prefers a tighter scope, use this minimal custom policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:Describe*",
+        "rds:Describe*",
+        "s3:ListAllMyBuckets",
+        "s3:GetBucket*",
+        "s3:ListBucket",
+        "efs:Describe*",
+        "fsx:Describe*",
+        "dynamodb:List*",
+        "dynamodb:Describe*",
+        "redshift:Describe*",
+        "redshift-serverless:List*",
+        "eks:List*",
+        "eks:Describe*",
+        "ecs:List*",
+        "ecs:Describe*",
+        "lambda:ListFunctions",
+        "workspaces:Describe*",
+        "docdb:Describe*",
+        "elasticache:Describe*",
+        "backup:List*",
+        "backup:Get*",
+        "cloudwatch:GetMetricStatistics",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+---
+
+## What's in the workbook
+
+### Summary dashboard (first sheet)
+
+The Summary sheet is a full dashboard — no need to click through every tab to get an overview.
+
+| Section | What it shows |
+|---|---|
+| **KPI tiles** | Total resources, total storage (TiB), EC2 running/stopped, RDS available/stopped, S3 object count, snapshot count |
+| **Workload inventory** | Every service type with resource count, storage in GiB and TiB, encryption %, and which regions it's deployed in |
+| **Risk & Findings** | Colour-coded CRITICAL / HIGH / MEDIUM findings with counts — unencrypted volumes, publicly accessible resources, missing backup configuration, no PITR, unattached volumes |
+| **AWS Backup infrastructure** | Existing backup vaults, locked (WORM) vaults, total recovery points, backup plans, cross-region copy rules |
+| **Region distribution** | How many resources are in each region |
+| **Storage by service** | Which services consume the most storage, ranked |
+| **EC2 state breakdown** | Instance counts by state, top instance types, OS breakdown |
+
+### Detail sheets (one per service)
+
+| Sheet | What you get |
+|---|---|
+| **EC2 Instances** | Instance ID, name, type, state, OS, AZ, environment tag, owner tag, root disk, data disks, total storage, backup tag, VPC |
+| **EBS Volumes** | Volume ID, type (gp3/io2/etc), size, IOPS, throughput, encrypted, attachment status |
+| **EBS Snapshots** | All snapshots owned by the account — size, encryption, age |
+| **RDS & Aurora** | Engine, version, instance class, storage, backup retention, Multi-AZ, encryption, public accessibility |
+| **S3 Buckets** | Size in MiB/GiB/TiB, object count, versioning, replication, lifecycle rules, encryption, public access block status |
+| **EFS** | File system size broken down by Standard and Infrequent Access tiers, throughput mode |
+| **FSx** | All FSx types (Windows, Lustre, ONTAP, OpenZFS) with capacity and configuration |
+| **DynamoDB** | Table size, item count, PITR status, billing mode (on-demand vs provisioned), global tables |
+| **Redshift** | Clusters and Serverless namespaces, node type, node count, backup retention |
+| **EKS** | Cluster version, node groups, total nodes, node instance types |
+| **ECS** | Active services, running tasks, capacity providers (Fargate/EC2) |
+| **Lambda** | Runtime, memory, timeout, package size, architecture |
+| **WorkSpaces** | User, bundle, root and user volume sizes, running mode |
+| **DocumentDB** | Cluster members, storage, backup retention, encryption |
+| **ElastiCache** | Engine (Redis/Memcached), node type, node count, backup retention |
+| **AWS Backup Vaults** | Recovery point count, immutability lock, retention limits |
+| **AWS Backup Plans** | Schedule, target vault, retention period, cross-region copy destination |
+
+---
+
+## Colour coding
+
+Every cell that represents a risk or gap is highlighted automatically:
+
+| Colour | Meaning |
+|---|---|
+| 🔴 Red | Critical gap — no backup, publicly accessible resource, unencrypted storage, 0-day retention |
+| 🟡 Yellow | Warning — stopped instance, unattached volume, versioning disabled, single-AZ database |
+| 🟢 Green | Protected / compliant |
+
+---
+
+## Troubleshooting
+
+| Error | Cause | Fix |
+|---|---|---|
+| `NoCredentialsError` | No AWS credentials found | Run `aws configure` or set `AWS_PROFILE` |
+| `AccessDenied` on a service | IAM policy missing that service | Add the relevant `Describe*` / `List*` actions |
+| `SubscriptionRequiredException` | Service not enabled in that region | Normal — the script skips it automatically |
+| `EndpointResolutionError` | Service unavailable in region | Normal — skipped automatically |
+| S3 sizes show `0` or `N/A` | CloudWatch metrics update once daily | The script falls back to direct listing; give it a moment on very large buckets |
+| Scan takes a long time | Large account or many regions | Add `--skip-snapshots` and increase `--workers` |
+
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `aws_assessment.py` | Main assessment script |
-| `create_test_environment.py` | Creates free-tier test resources |
-| `destroy_test_environment.py` | Tears down all test resources |
-| `generate_sample_report.py` | Generates a sample report with fake data |
-| `requirements.txt` | Python dependencies |
-| `QUICKSTART.md` | IAM policy + detailed usage reference |
-
-## Requirements
-
-- Python 3.10+
-- `boto3`, `openpyxl`, `tqdm`
-- AWS credentials configured (`aws configure` or IAM role)
+| `aws_assessment.py` | The assessment script |
+| `requirements.txt` | Python dependencies (`boto3`, `openpyxl`, `tqdm`) |
+| `QUICKSTART.md` | Step-by-step setup guide including IAM policy |
