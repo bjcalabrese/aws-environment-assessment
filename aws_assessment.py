@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 AWS Environment Assessment Tool
-RVTools-equivalent for AWS — inventories and sizes all workload types for backup planning.
-Outputs a multi-sheet Excel workbook.
+
+Read-only inventory tool that scans an AWS account and produces a single
+multi-sheet Excel workbook covering every major workload type — EC2, EBS,
+RDS, S3, EFS, FSx, DynamoDB, Redshift, EKS, ECS, Lambda, WorkSpaces,
+DocumentDB, ElastiCache, and AWS Backup.
 
 DISCLAIMER
 ----------
@@ -15,8 +18,8 @@ Requirements:
 
 Usage:
     python aws_assessment.py
-    python aws_assessment.py --regions us-east-1 us-west-2 --profile prod
-    python aws_assessment.py --all-regions --output my_customer_assessment.xlsx
+    python aws_assessment.py --regions us-east-1 us-west-2 --profile myprofile
+    python aws_assessment.py --all-regions --output my_assessment.xlsx
 """
 
 import boto3
@@ -1517,9 +1520,11 @@ def build_workbook(data, account_id, regions, assessed_at, output_path):
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="AWS Environment Assessment — RVTools for AWS",
+        description=(
+            "AWS Environment Assessment Tool — read-only inventory scanner that "
+            "produces a multi-sheet Excel workbook covering every major AWS workload type."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
     )
     p.add_argument(
         "--regions", nargs="+", default=None,
