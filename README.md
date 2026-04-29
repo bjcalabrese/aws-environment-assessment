@@ -61,51 +61,150 @@ Open it in Excel or Google Sheets.
 
 ## All options
 
-| Flag | Description | Example |
+| Flag | Description | Default |
 |---|---|---|
-| `--regions` | One or more regions to scan | `--regions us-east-1 eu-west-1` |
-| `--all-regions` | Scan every enabled region | `--all-regions` |
-| `--profile` | AWS CLI profile name | `--profile customer-prod` |
-| `--output` | Custom output filename | `--output "Acme_2024.xlsx"` |
-| `--workers` | Parallel region workers (default: 4) | `--workers 8` |
-| `--skip-snapshots` | Skip EBS snapshot enumeration | `--skip-snapshots` |
-| `--verbose` | Show detailed logging | `--verbose` |
+| `--regions` | One or more specific regions to scan | Current configured region |
+| `--all-regions` | Scan every enabled region in the account | — |
+| `--profile` | AWS CLI named profile | Default profile |
+| `--output` | Output `.xlsx` filename | `aws_assessment_<account>_<date>.xlsx` |
+| `--workers` | Number of regions scanned in parallel | `4` |
+| `--skip-snapshots` | Skip EBS snapshot enumeration | — |
+| `--verbose` | Print detailed per-service logging | — |
 
-### Common usage patterns
+---
+
+## Examples
+
+### Basic scans
 
 ```bash
-# Customer account using a named profile, all regions, custom filename
-python aws_assessment.py \
-  --profile customer-prod \
-  --all-regions \
-  --output "CustomerName_$(date +%Y%m%d).xlsx"
+# Scan your current region with default credentials
+python aws_assessment.py
 
-# Large account — skip snapshots to speed up the scan
+# Scan a single specific region
+python aws_assessment.py --regions us-east-1
+
+# Scan multiple specific regions
+python aws_assessment.py --regions us-east-1 us-west-2 eu-west-1 ap-southeast-1
+
+# Scan every enabled region in the account
+python aws_assessment.py --all-regions
+```
+
+### Customer accounts
+
+```bash
+# First: add the customer's credentials as a named profile
+aws configure --profile acme-corp
+# (enter their Access Key ID, Secret Access Key, region, output=json)
+
+# Verify the credentials work
+aws sts get-caller-identity --profile acme-corp
+
+# Run a full assessment — all regions, date-stamped output file
+python aws_assessment.py \
+  --profile acme-corp \
+  --all-regions \
+  --output "AcmeCorp_Assessment_$(date +%Y%m%d).xlsx"
+```
+
+```bash
+# Customer using AWS SSO
+aws sso login --profile acme-sso
+python aws_assessment.py \
+  --profile acme-sso \
+  --all-regions \
+  --output "AcmeCorp_SSO_$(date +%Y%m%d).xlsx"
+```
+
+```bash
+# Customer using a cross-account IAM role (assume role)
+# First configure the profile in ~/.aws/config:
+#
+# [profile acme-readonly]
+# role_arn = arn:aws:iam::123456789012:role/ReadOnlyAssessmentRole
+# source_profile = default
+# region = us-east-1
+#
+aws sts get-caller-identity --profile acme-readonly   # verify
+python aws_assessment.py --profile acme-readonly --all-regions
+```
+
+### Large or complex accounts
+
+```bash
+# Skip EBS snapshots — biggest time saving on accounts with thousands of snapshots
 python aws_assessment.py --all-regions --skip-snapshots
 
-# Faster scan with more parallel workers
-python aws_assessment.py --all-regions --workers 8
+# Increase parallel workers for faster multi-region scans (one worker per region)
+python aws_assessment.py --all-regions --workers 10
 
-# Single region, verbose output to see what's happening
+# Both together — fastest possible full-account scan
+python aws_assessment.py \
+  --all-regions \
+  --skip-snapshots \
+  --workers 10 \
+  --output "LargeAccount_$(date +%Y%m%d).xlsx"
+```
+
+### Targeted scans
+
+```bash
+# US regions only
+python aws_assessment.py --regions us-east-1 us-east-2 us-west-1 us-west-2
+
+# Europe only
+python aws_assessment.py --regions eu-west-1 eu-west-2 eu-west-3 eu-central-1 eu-north-1
+
+# APAC only
+python aws_assessment.py --regions ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-south-1
+
+# Single region with verbose logging (useful for debugging or first run)
 python aws_assessment.py --regions us-east-1 --verbose
+```
+
+### Windows users (Command Prompt)
+
+```cmd
+rem Basic scan
+python aws_assessment.py --regions us-east-1
+
+rem Customer profile, all regions
+python aws_assessment.py --profile acme-corp --all-regions --output "AcmeCorp_Assessment.xlsx"
+```
+
+### Windows users (PowerShell)
+
+```powershell
+# Basic scan
+python aws_assessment.py --regions us-east-1
+
+# Date-stamped output
+$date = Get-Date -Format "yyyyMMdd"
+python aws_assessment.py --profile acme-corp --all-regions --output "AcmeCorp_$date.xlsx"
 ```
 
 ---
 
 ## Setting up credentials for a customer account
 
-The cleanest approach is to create a named AWS CLI profile for each customer:
-
 ```bash
-# Add a new profile
+# Step 1: Add a named profile for the customer
 aws configure --profile customer-name
-# Enter: Access Key ID, Secret Access Key, default region (e.g. us-east-1), output format (json)
+# Prompts for:
+#   AWS Access Key ID:     (paste their key)
+#   AWS Secret Access Key: (paste their secret)
+#   Default region:        us-east-1
+#   Default output format: json
 
-# Verify it works
+# Step 2: Confirm it works — you should see their Account ID
 aws sts get-caller-identity --profile customer-name
 
-# Run the assessment
-python aws_assessment.py --profile customer-name --all-regions
+# Step 3: Run the assessment
+python aws_assessment.py \
+  --profile customer-name \
+  --all-regions \
+  --output "CustomerName_$(date +%Y%m%d).xlsx"
 ```
 
 If the customer uses AWS SSO:

@@ -96,6 +96,105 @@ Options:
 
 ---
 
+## Example commands
+
+### First run — single region, see what happens
+
+```bash
+python aws_assessment.py --regions us-east-1 --verbose
+```
+
+### Full account scan with a date-stamped file
+
+```bash
+# macOS / Linux
+python aws_assessment.py --all-regions --output "Assessment_$(date +%Y%m%d).xlsx"
+
+# Windows PowerShell
+$date = Get-Date -Format "yyyyMMdd"
+python aws_assessment.py --all-regions --output "Assessment_$date.xlsx"
+
+# Windows Command Prompt
+python aws_assessment.py --all-regions --output "Assessment.xlsx"
+```
+
+### Customer account — complete workflow
+
+```bash
+# 1. Add their credentials as a named profile
+aws configure --profile acme-corp
+#    AWS Access Key ID:     AKIA...
+#    AWS Secret Access Key: xxxxxxxx
+#    Default region:        us-east-1
+#    Default output format: json
+
+# 2. Verify you can authenticate as them
+aws sts get-caller-identity --profile acme-corp
+#    {
+#        "UserId": "AIDA...",
+#        "Account": "123456789012",
+#        "Arn": "arn:aws:iam::123456789012:user/assessment-readonly"
+#    }
+
+# 3. Run the assessment
+python aws_assessment.py \
+  --profile acme-corp \
+  --all-regions \
+  --output "AcmeCorp_Assessment_$(date +%Y%m%d).xlsx"
+```
+
+### Customer using AWS SSO
+
+```bash
+aws sso login --profile acme-sso
+python aws_assessment.py \
+  --profile acme-sso \
+  --all-regions \
+  --output "AcmeCorp_$(date +%Y%m%d).xlsx"
+```
+
+### Customer using a cross-account IAM role
+
+```bash
+# Add this to ~/.aws/config:
+#
+# [profile acme-readonly]
+# role_arn     = arn:aws:iam::123456789012:role/ReadOnlyAssessmentRole
+# source_profile = default
+# region       = us-east-1
+
+aws sts get-caller-identity --profile acme-readonly   # confirm role assumption works
+python aws_assessment.py --profile acme-readonly --all-regions
+```
+
+### Large account — fastest scan
+
+```bash
+python aws_assessment.py \
+  --all-regions \
+  --skip-snapshots \
+  --workers 10 \
+  --output "LargeAccount_$(date +%Y%m%d).xlsx"
+```
+
+### Regional scans
+
+```bash
+# US only
+python aws_assessment.py \
+  --regions us-east-1 us-east-2 us-west-1 us-west-2
+
+# Europe only
+python aws_assessment.py \
+  --regions eu-west-1 eu-west-2 eu-west-3 eu-central-1 eu-north-1
+
+# APAC only
+python aws_assessment.py \
+  --regions ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-northeast-2 ap-south-1
+```
+
+---
+
 ## IAM permissions
 
 The tool is read-only. It never creates, modifies, or deletes anything.
