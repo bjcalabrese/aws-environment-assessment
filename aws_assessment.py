@@ -1597,9 +1597,13 @@ def main():
     data = merge_results(all_results)
     data["S3 Buckets"] = s3_data
 
-    # Output path
+    # Output path — strip any directory components to prevent path traversal
+    import os as _os
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
-    output = args.output or f"aws_assessment_{account_id}_{date_str}.xlsx"
+    raw_output = args.output or f"aws_assessment_{account_id}_{date_str}.xlsx"
+    output = _os.path.basename(raw_output) if args.output else raw_output
+    if not output.endswith(".xlsx"):
+        output += ".xlsx"
 
     # Build workbook
     print("\nBuilding Excel workbook...")

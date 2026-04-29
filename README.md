@@ -316,6 +316,70 @@ Every cell that represents a risk or gap is highlighted automatically:
 
 ---
 
+## Security
+
+This section explains exactly what the tool does and does not do with your AWS account and data — so you can share it with security-conscious customers with confidence.
+
+### The tool is 100% read-only
+
+Every AWS API call made by this script is a read operation — `Describe*`, `List*`, or `Get*`. There are no `Create`, `Put`, `Update`, `Delete`, or `Modify` calls anywhere in the code. It is **not possible** for this tool to create, change, or delete any resource in your account.
+
+You can verify this yourself:
+```bash
+# Search the source for any write operations
+grep -E "(create_|delete_|put_|update_|modify_|terminate_|run_|start_|stop_)" aws_assessment.py
+# Returns nothing
+```
+
+### Credentials stay on your machine
+
+- AWS credentials are passed directly to the `boto3` SDK — the same library used by the official AWS CLI
+- Credentials are **never** printed, logged, written to files, or transmitted anywhere other than to AWS API endpoints
+- The script has no knowledge of your access keys; it only calls `boto3.Session(profile_name=...)` and boto3 handles everything else
+
+### No data leaves your machine
+
+- The only output is the `.xlsx` file written locally to your current directory
+- The script makes **no HTTP calls** to any server other than official AWS API endpoints (`*.amazonaws.com`)
+- There is no telemetry, no analytics, no call-home behaviour of any kind
+- No third-party libraries with network capability are used — only `boto3` (AWS), `openpyxl` (local Excel writing), and `tqdm` (local progress bar)
+
+You can verify the network behaviour:
+```bash
+# Confirm no unexpected imports
+grep -E "^import|^from" aws_assessment.py | grep -vE "boto3|openpyxl|json|sys|argparse|datetime|logging|collections|concurrent"
+# Returns nothing
+```
+
+### What's in the output file
+
+The `.xlsx` file contains only resource **metadata** — the same information visible in the AWS Console:
+
+- Resource IDs, names, types, and sizes
+- Configuration flags (encrypted: yes/no, multi-AZ: yes/no, public: yes/no)
+- Region and availability zone
+- Tags you've applied to resources
+- Counts and storage totals
+
+It does **not** contain:
+- AWS access keys or secret keys
+- Database passwords or connection strings
+- KMS key material or key ARNs
+- Application secrets or environment variable values
+- Any data stored inside your resources (no S3 object contents, no database rows)
+
+### IAM permissions
+
+The tool only needs read-only access. We recommend creating a dedicated IAM user or role with the minimal policy in this README — not your admin credentials.
+
+The minimal policy grants access to 25 specific `Describe*`/`List*`/`Get*` actions and nothing else. You can revoke it immediately after the assessment is complete.
+
+### Open source
+
+The full source code is in this repository. There are no compiled binaries, no obfuscated code, and no external dependencies beyond the three packages in `requirements.txt`. You or your security team can review every line before running it.
+
+---
+
 ## Troubleshooting
 
 | Error | Cause | Fix |
