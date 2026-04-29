@@ -1,5 +1,7 @@
 # AWS Environment Assessment Tool
 
+> **Disclaimer:** This is a community sample script provided without support guarantees. It is not an official product and is not covered by any support agreement. Use at your own risk. Review the code before running it in any environment.
+
 A read-only AWS inventory tool that scans your account and produces a single Excel workbook covering every major workload type. Think of it as RVTools — but for AWS.
 
 The output is a colour-coded, multi-sheet spreadsheet your team can use to understand what's running, what's at risk, and how much storage needs to be protected.

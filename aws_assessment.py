@@ -4,8 +4,14 @@ AWS Environment Assessment Tool
 RVTools-equivalent for AWS — inventories and sizes all workload types for backup planning.
 Outputs a multi-sheet Excel workbook.
 
+DISCLAIMER
+----------
+This is a community sample script provided without support guarantees.
+It is not an official product and is not covered by any support agreement.
+Use at your own risk. Review the code before running it in any environment.
+
 Requirements:
-    pip install boto3 openpyxl xlsxwriter tqdm
+    pip install boto3 openpyxl tqdm
 
 Usage:
     python aws_assessment.py

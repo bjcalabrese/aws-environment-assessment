@@ -1,5 +1,7 @@
 # Quick Start Guide
 
+> **Disclaimer:** This is a community sample script provided without support guarantees. It is not an official product and is not covered by any support agreement. Use at your own risk.
+
 This guide gets you from zero to a completed AWS assessment in under 10 minutes.
 
 ---
