@@ -31,8 +31,8 @@ The launcher checks for Python 3.10+, installs all dependencies, walks you throu
 
 ## How it works
 
-1. The launcher ensures Python 3.10+ is installed (installs it if not)
-2. Dependencies are installed automatically (`boto3`, `openpyxl`, `tqdm`)
+1. The launcher finds Python 3.10+ (installs it if missing) — or uses an existing `.venv/` for instant startup on repeat runs
+2. Dependencies are installed automatically into a virtual environment if needed (`boto3`, `openpyxl`, `tqdm`) — handles PEP 668 / Homebrew Python automatically
 3. You choose how to authenticate and which regions to scan
 4. The scanner runs in parallel across all selected regions
 5. A single `.xlsx` workbook is written to the current directory

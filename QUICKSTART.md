@@ -33,17 +33,16 @@ That's it. The launcher checks for Python, installs dependencies, walks you thro
 
 | Step | What it does |
 |---|---|
-| **1 — Python check** | Confirms Python 3.10+ is available; shows upgrade instructions if not |
-| **2 — AWS CLI check** | Checks for the AWS CLI; shows install instructions if missing |
-| **3 — Dependencies** | Runs `pip install -r requirements.txt` with live output |
-| **4 — Authentication** | Choose: IAM Identity Center login, named profile, environment variables, or enter access keys |
-| **5 — Regions** | Choose: all regions, specific regions, or current default only |
-| **6 — Scan options** | Skip snapshots toggle, worker count, output filename, verbose mode |
-| **7 — Run** | Executes the scan with live output, then offers to open the workbook |
+| **1 — Environment check** | Confirms Python 3.10+, AWS CLI, and dependencies; installs missing packages automatically (creates `.venv/` if needed) |
+| **2 — Authentication** | Choose: IAM Identity Center, named profile, environment variables, enter access keys, or use existing credentials — then verifies identity and shows account ID |
+| **3 — Regions** | Choose: all enabled regions, specific regions, or current default only |
+| **4 — Scan options** | Select a preset (Quick / Standard / Full) or configure individually — skip snapshots, worker count, output filename, verbose mode |
+| **5 — Summary** | Review full scan configuration before starting |
+| **6 — Run** | Executes the scan with live output, shows elapsed time, then offers to open the workbook |
 
 ---
 
-## Authentication options (Step 4)
+## Authentication options (Step 2)
 
 | Option | When to use |
 |---|---|
@@ -106,16 +105,16 @@ Tighter scope — custom policy with only the actions this tool uses:
 
 | Situation | What to do in the wizard |
 |---|---|
-| Account with many snapshots | Enable "Skip EBS snapshot enumeration" in Step 6 |
-| Scanning 10+ regions | Increase workers to 8–10 in Step 6 |
-| First run / debugging | Enable verbose mode in Step 6 |
+| Account with many snapshots | Enable "Skip EBS snapshot enumeration" in Step 4 (or choose Quick scan preset) |
+| Scanning 10+ regions | Increase workers to 8–10 in Step 4 (Custom mode) |
+| First run / debugging | Enable verbose mode in Step 4 (Custom mode) |
 
 ---
 
 ## Troubleshooting
 
 **`NoCredentialsError`**
-No credentials found. Choose a different authentication option in Step 4, or run `aws configure` before launching.
+No credentials found. Choose a different authentication option in Step 2, or run `aws configure` before launching.
 
 **`AccessDenied` on a specific service**
 Your IAM policy is missing that service's `Describe*` / `List*` action. Add it from the policy above.
