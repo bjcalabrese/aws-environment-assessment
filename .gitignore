@@ -4,3 +4,7 @@ __pycache__/
 .env
 test_env_manifest.json.destroyed
 *.log
+.venv/
+.last_run.json
+.DS_Store
+.claude/

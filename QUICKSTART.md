@@ -2,211 +2,69 @@
 
 > **Disclaimer:** This is a community sample script provided without support guarantees. It is not an official product and is not covered by any support agreement. Use at your own risk.
 
-This guide gets you from zero to a completed AWS assessment in under 10 minutes.
+Gets you from zero to a completed AWS assessment in under 10 minutes.
 
 ---
 
-## Step 1 — Install Python dependencies
+## Run it
 
-You need Python 3.10 or later. Check with `python --version`.
+### macOS / Linux
 
 ```bash
-pip install -r requirements.txt
+./start-assessment.sh
 ```
 
-This installs three packages: `boto3` (AWS SDK), `openpyxl` (Excel writer), and `tqdm` (progress bars).
+### Windows (PowerShell)
+
+```powershell
+.\Start-Assessment.ps1
+```
+
+> If you get an execution policy error, run:
+> ```powershell
+> powershell -ExecutionPolicy Bypass -File .\Start-Assessment.ps1
+> ```
+
+That's it. The launcher checks for Python, installs dependencies, walks you through credentials and region selection, runs the scan, and opens the workbook when done.
 
 ---
 
-## Step 2 — Set up AWS credentials
+## What the wizard asks
 
-The tool uses the same credentials as the AWS CLI. Pick one of the following:
-
-### Option A: You already use the AWS CLI
-
-```bash
-# Verify your credentials are active
-aws sts get-caller-identity
-```
-
-If that returns your Account ID and ARN, skip to Step 3.
-
-### Option B: First-time setup
-
-```bash
-aws configure
-```
-
-You'll be prompted for:
-- **AWS Access Key ID** — from IAM → Users → Security credentials → Create access key
-- **AWS Secret Access Key** — shown once at creation time
-- **Default region** — e.g. `us-east-1`
-- **Output format** — type `json`
-
-### Option C: Customer account using a named profile
-
-```bash
-aws configure --profile customer-name
-aws sts get-caller-identity --profile customer-name   # verify it works
-```
+| Step | What it does |
+|---|---|
+| **1 — Python check** | Confirms Python 3.10+ is available; shows upgrade instructions if not |
+| **2 — AWS CLI check** | Checks for the AWS CLI; shows install instructions if missing |
+| **3 — Dependencies** | Runs `pip install -r requirements.txt` with live output |
+| **4 — Authentication** | Choose: IAM Identity Center login, named profile, environment variables, or enter access keys |
+| **5 — Regions** | Choose: all regions, specific regions, or current default only |
+| **6 — Scan options** | Skip snapshots toggle, worker count, output filename, verbose mode |
+| **7 — Run** | Executes the scan with live output, then offers to open the workbook |
 
 ---
 
-## Step 3 — Run the assessment
+## Authentication options (Step 4)
 
-```bash
-# Scan your default region
-python aws_assessment.py
-
-# Scan specific regions
-python aws_assessment.py --regions us-east-1 us-west-2 eu-west-1
-
-# Scan every region in the account (most thorough, 5–20 min depending on size)
-python aws_assessment.py --all-regions
-
-# Customer account with a named profile
-python aws_assessment.py --profile customer-name --all-regions
-
-# Custom output filename
-python aws_assessment.py --all-regions --output "CustomerName_$(date +%Y%m%d).xlsx"
-```
-
-The `.xlsx` file is saved in the directory you run the script from.
-
----
-
-## Step 4 — Open the workbook
-
-Open the file in Excel or Google Sheets. Start with the **Summary** sheet — it gives you the full picture without needing to look at individual tabs.
-
----
-
-## All command-line options
-
-```
-python aws_assessment.py [OPTIONS]
-
-Options:
-  --regions REGION [REGION ...]   Regions to scan (default: current region)
-  --all-regions                   Scan all enabled regions in the account
-  --profile PROFILE               AWS CLI profile name
-  --output FILENAME               Output .xlsx filename
-  --workers N                     Parallel region workers, default 4
-  --skip-snapshots                Skip EBS snapshot enumeration (faster)
-  --verbose                       Show detailed logging
-```
-
----
-
-## Example commands
-
-### First run — single region, see what happens
-
-```bash
-python aws_assessment.py --regions us-east-1 --verbose
-```
-
-### Full account scan with a date-stamped file
-
-```bash
-# macOS / Linux
-python aws_assessment.py --all-regions --output "Assessment_$(date +%Y%m%d).xlsx"
-
-# Windows PowerShell
-$date = Get-Date -Format "yyyyMMdd"
-python aws_assessment.py --all-regions --output "Assessment_$date.xlsx"
-
-# Windows Command Prompt
-python aws_assessment.py --all-regions --output "Assessment.xlsx"
-```
-
-### Customer account — complete workflow
-
-```bash
-# 1. Add their credentials as a named profile
-aws configure --profile acme-corp
-#    AWS Access Key ID:     AKIA...
-#    AWS Secret Access Key: xxxxxxxx
-#    Default region:        us-east-1
-#    Default output format: json
-
-# 2. Verify you can authenticate as them
-aws sts get-caller-identity --profile acme-corp
-#    {
-#        "UserId": "AIDA...",
-#        "Account": "123456789012",
-#        "Arn": "arn:aws:iam::123456789012:user/assessment-readonly"
-#    }
-
-# 3. Run the assessment
-python aws_assessment.py \
-  --profile acme-corp \
-  --all-regions \
-  --output "AcmeCorp_Assessment_$(date +%Y%m%d).xlsx"
-```
-
-### Customer using AWS SSO
-
-```bash
-aws sso login --profile acme-sso
-python aws_assessment.py \
-  --profile acme-sso \
-  --all-regions \
-  --output "AcmeCorp_$(date +%Y%m%d).xlsx"
-```
-
-### Customer using a cross-account IAM role
-
-```bash
-# Add this to ~/.aws/config:
-#
-# [profile acme-readonly]
-# role_arn     = arn:aws:iam::123456789012:role/ReadOnlyAssessmentRole
-# source_profile = default
-# region       = us-east-1
-
-aws sts get-caller-identity --profile acme-readonly   # confirm role assumption works
-python aws_assessment.py --profile acme-readonly --all-regions
-```
-
-### Large account — fastest scan
-
-```bash
-python aws_assessment.py \
-  --all-regions \
-  --skip-snapshots \
-  --workers 10 \
-  --output "LargeAccount_$(date +%Y%m%d).xlsx"
-```
-
-### Regional scans
-
-```bash
-# US only
-python aws_assessment.py \
-  --regions us-east-1 us-east-2 us-west-1 us-west-2
-
-# Europe only
-python aws_assessment.py \
-  --regions eu-west-1 eu-west-2 eu-west-3 eu-central-1 eu-north-1
-
-# APAC only
-python aws_assessment.py \
-  --regions ap-southeast-1 ap-southeast-2 ap-northeast-1 ap-northeast-2 ap-south-1
-```
+| Option | When to use |
+|---|---|
+| **IAM Identity Center** | You use `aws login` for access (AWS SSO / Identity Center) |
+| **Named profile** | You have a named profile in `~/.aws/credentials` or `~/.aws/config` |
+| **Environment variables** | `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are already set in your shell |
+| **Access key / secret key** | Enter credentials directly — set for this session only, never written to disk |
+| **Already authenticated** | Boto3 will pick up existing credentials automatically |
 
 ---
 
 ## IAM permissions
 
-The tool is read-only. It never creates, modifies, or deletes anything.
+The tool is **100% read-only** — it never creates, modifies, or deletes anything.
 
-**Quickest option** — attach the AWS managed policy:
+Simplest option — attach the AWS managed policy to your IAM user or role:
 ```
 arn:aws:iam::aws:policy/ReadOnlyAccess
 ```
 
-**Tighter scope** — create a custom policy with only these actions:
+Tighter scope — custom policy with only the actions this tool uses:
 
 ```json
 {
@@ -217,25 +75,22 @@ arn:aws:iam::aws:policy/ReadOnlyAccess
       "Action": [
         "ec2:Describe*",
         "rds:Describe*",
-        "s3:ListAllMyBuckets",
-        "s3:GetBucket*",
-        "s3:ListBucket",
+        "s3:ListAllMyBuckets", "s3:GetBucket*", "s3:ListBucket",
         "efs:Describe*",
         "fsx:Describe*",
-        "dynamodb:List*",
-        "dynamodb:Describe*",
-        "redshift:Describe*",
-        "redshift-serverless:List*",
-        "eks:List*",
-        "eks:Describe*",
-        "ecs:List*",
-        "ecs:Describe*",
+        "dynamodb:List*", "dynamodb:Describe*",
+        "redshift:Describe*", "redshift-serverless:List*",
+        "eks:List*", "eks:Describe*",
+        "ecs:List*", "ecs:Describe*",
         "lambda:ListFunctions",
         "workspaces:Describe*",
         "docdb:Describe*",
         "elasticache:Describe*",
-        "backup:List*",
-        "backup:Get*",
+        "backup:List*", "backup:Get*",
+        "kms:ListKeys", "kms:DescribeKey", "kms:ListAliases",
+        "secretsmanager:ListSecrets",
+        "sqs:ListQueues", "sqs:GetQueueAttributes",
+        "ce:GetCostAndUsage",
         "cloudwatch:GetMetricStatistics",
         "sts:GetCallerIdentity"
       ],
@@ -245,90 +100,73 @@ arn:aws:iam::aws:policy/ReadOnlyAccess
 }
 ```
 
-To create this policy and attach it to an IAM user via CLI:
-
-```bash
-# Save the policy above to a file
-cat > assessment-policy.json << 'EOF'
-{ ...paste policy here... }
-EOF
-
-# Create the policy
-aws iam create-policy \
-  --policy-name AWSAssessmentReadOnly \
-  --policy-document file://assessment-policy.json
-
-# Attach to a user
-aws iam attach-user-policy \
-  --user-name your-iam-user \
-  --policy-arn arn:aws:iam::<account-id>:policy/AWSAssessmentReadOnly
-```
-
 ---
 
 ## Tips for large accounts
 
-| Situation | Recommended flags |
+| Situation | What to do in the wizard |
 |---|---|
-| Account with 1,000+ snapshots | `--skip-snapshots` |
-| Scanning 10+ regions | `--workers 8` |
-| Both of the above | `--all-regions --skip-snapshots --workers 8` |
-| Want to watch progress | `--verbose` |
-
----
-
-## Understanding the output
-
-### Summary sheet layout
-
-```
-┌─────────────────────────────────────────────────┐
-│           AWS Environment Assessment            │  ← Title + account/date
-├──────────┬──────────┬──────────┬──────────┬─────┤
-│ TOTAL    │ STORAGE  │  EC2     │  RDS     │ S3  │  ← KPI tiles
-│ RESOURCES│  (TiB)   │ running  │available │ etc │
-├──────────┴──────────┴──────────┴──────────┴─────┤
-│                                                  │
-│  Workload Inventory    │  Risk & Findings        │
-│  (left column)         │  (right column)         │
-│                        │                         │
-│  EC2 Instances    45   │  CRITICAL  Unencrypted  │
-│  EBS Volumes      80   │  HIGH      No backup tag│
-│  RDS / Aurora     12   │  MEDIUM    No versioning│
-│  S3 Buckets       28   │                         │
-│  ...                   │  Backup Infrastructure  │
-│                        │  Region Distribution    │
-│  EC2 Breakdown         │  Storage by Service     │
-└────────────────────────┴─────────────────────────┘
-```
-
-### Colour coding
-
-| Colour | Meaning | Examples |
-|---|---|---|
-| Red | Critical risk or gap | No backup, public S3 bucket, unencrypted EBS, public RDS |
-| Yellow | Warning | Stopped EC2, single-AZ RDS, versioning off, unattached volume |
-| Green | Protected | (used in Risk column when count = 0) |
-
-### S3 size columns
-
-S3 buckets show three size columns: **MiB**, **GiB**, and **TiB**. This is intentional — small buckets show a meaningful value in MiB while large buckets are easier to read in TiB.
+| Account with many snapshots | Enable "Skip EBS snapshot enumeration" in Step 6 |
+| Scanning 10+ regions | Increase workers to 8–10 in Step 6 |
+| First run / debugging | Enable verbose mode in Step 6 |
 
 ---
 
 ## Troubleshooting
 
 **`NoCredentialsError`**
-Your credentials aren't configured. Run `aws configure` or check that your profile name matches what's in `~/.aws/credentials`.
+No credentials found. Choose a different authentication option in Step 4, or run `aws configure` before launching.
 
 **`AccessDenied` on a specific service**
-Your IAM policy is missing permissions for that service. Add the relevant `Describe*` or `List*` action from the policy above.
+Your IAM policy is missing that service's `Describe*` / `List*` action. Add it from the policy above.
 
-**`SubscriptionRequiredException` or `OptInRequired` warnings**
-Certain services (FSx, Redshift) require explicit opt-in before use. These warnings are normal on accounts that haven't enabled those services — the script skips them and continues.
+**FSx / Redshift warnings**
+These services require explicit opt-in. If your account hasn't subscribed to them, the warnings are suppressed automatically — nothing to fix.
 
 **S3 sizes show `N/A` or `0`**
-S3 size metrics in CloudWatch update once every 24 hours. For buckets with no CloudWatch history yet, the script falls back to direct object listing. On very large buckets (millions of objects) this fallback is capped at 100,000 objects — the CloudWatch metric will populate by the next day.
+CloudWatch S3 metrics update once every 24 hours. Values will appear the following day for newly created buckets.
 
 **Scan is slow**
-Add `--skip-snapshots` (EBS snapshot enumeration is the slowest part on large accounts) and increase `--workers` to match the number of regions you're scanning.
+Enable "Skip EBS snapshots" and increase workers in Step 6.
+
+**`pip install` blocked — "externally managed environment"**
+This happens on macOS with Homebrew Python or modern Linux distros (Ubuntu 23.04+, Debian 12+). The wizard detects this automatically and creates a `.venv/` folder in the project directory. No action needed — subsequent runs use the venv directly.
+
+**`No module named venv` on Linux**
+Some minimal Linux installs don't include the venv module. Install it first:
+```bash
+# Debian / Ubuntu
+sudo apt-get install python3-venv python3-pip
+
+# RHEL / CentOS
+sudo dnf install python3-venv
+```
+
+---
+
+## Direct usage (advanced)
+
+If you prefer to skip the wizard and run the scanner directly:
+
+```bash
+python aws_assessment.py [OPTIONS]
+
+Options:
+  --regions REGION [REGION ...]   Regions to scan (default: current region)
+  --all-regions                   Scan all enabled regions
+  --profile PROFILE               AWS CLI profile name
+  --output FILENAME               Output .xlsx filename
+  --workers N                     Parallel workers (default: 4)
+  --skip-snapshots                Skip EBS snapshot enumeration
+  --verbose                       Show detailed logging
+```
+
+Examples:
+
+```bash
+# All regions, date-stamped output
+python aws_assessment.py --all-regions --output "Assessment_$(date +%Y%m%d).xlsx"
+
+# Named profile, specific regions, fastest scan
+python aws_assessment.py --profile acme-corp --regions us-east-1 us-west-2 --skip-snapshots --workers 8
+```

@@ -107,6 +107,18 @@ def get_all_regions(session):
 def make_client(session, service, region):
     return session.client(service, region_name=region)
 
+# Error codes that mean "service not subscribed / not opted-in" — silent skip
+_OPTIN_ERRORS = ("OptInRequired", "SubscriptionRequiredException",
+                 "InvalidClientTokenId", "UnrecognizedClientException")
+
+def log_collector_error(service, region, exc):
+    """Log a collector exception — suppress noisy opt-in/subscription errors."""
+    err = str(exc)
+    if any(code in err for code in _OPTIN_ERRORS):
+        log.debug("%s %s: service not enabled in this region/account", service, region)
+    else:
+        log.warning("%s %s: %s", service, region, exc)
+
 def chunks(lst, n):
     for i in range(0, len(lst), n):
         yield lst[i:i + n]
@@ -465,7 +477,7 @@ def collect_efs(session, region):
                     "Created":              str(fs.get("CreationTime", ""))[:10],
                 })
     except Exception as e:
-        log.warning("EFS %s: %s", region, e)
+        log_collector_error("EFS", region, e)
     return rows
 
 
@@ -509,7 +521,7 @@ def collect_fsx(session, region):
                     "Created":              str(fs.get("CreationTime", ""))[:10],
                 })
     except Exception as e:
-        log.warning("FSx %s: %s", region, e)
+        log_collector_error("FSx", region, e)
     return rows
 
 
@@ -556,7 +568,7 @@ def collect_dynamodb(session, region):
                 except Exception:
                     pass
     except Exception as e:
-        log.warning("DynamoDB %s: %s", region, e)
+        log_collector_error("DynamoDB", region, e)
     return rows
 
 
@@ -587,7 +599,7 @@ def collect_redshift(session, region):
                     "Created":              str(cl.get("ClusterCreateTime", ""))[:10],
                 })
     except Exception as e:
-        log.warning("Redshift %s: %s", region, e)
+        log_collector_error("Redshift", region, e)
 
     # Redshift Serverless
     try:
@@ -658,7 +670,7 @@ def collect_eks(session, region):
                 "Created":          str(cl.get("createdAt", ""))[:10],
             })
     except Exception as e:
-        log.warning("EKS %s: %s", region, e)
+        log_collector_error("EKS", region, e)
     return rows
 
 
@@ -687,7 +699,7 @@ def collect_ecs(session, region):
                     "Notes":                "",
                 })
     except Exception as e:
-        log.warning("ECS %s: %s", region, e)
+        log_collector_error("ECS", region, e)
     return rows
 
 
@@ -711,7 +723,7 @@ def collect_lambda(session, region):
                     "Description":      fn.get("Description", ""),
                 })
     except Exception as e:
-        log.warning("Lambda %s: %s", region, e)
+        log_collector_error("Lambda", region, e)
     return rows
 
 
@@ -736,7 +748,7 @@ def collect_workspaces(session, region):
                     "Protocol":         ", ".join(w.get("WorkspaceProperties", {}).get("Protocols", [])),
                 })
     except Exception as e:
-        log.warning("WorkSpaces %s: %s", region, e)
+        log_collector_error("WorkSpaces", region, e)
     return rows
 
 
@@ -762,7 +774,7 @@ def collect_documentdb(session, region):
                     "Created":              str(cl.get("ClusterCreateTime", ""))[:10],
                 })
     except Exception as e:
-        log.warning("DocumentDB %s: %s", region, e)
+        log_collector_error("DocumentDB", region, e)
     return rows
 
 
@@ -789,7 +801,7 @@ def collect_elasticache(session, region):
                     "Created":          str(cl.get("CacheClusterCreateTime", ""))[:10],
                 })
     except Exception as e:
-        log.warning("ElastiCache %s: %s", region, e)
+        log_collector_error("ElastiCache", region, e)
     return rows
 
 
@@ -812,7 +824,7 @@ def collect_aws_backup(session, region):
                     "Created":          str(vault.get("CreationDate", ""))[:10],
                 })
     except Exception as e:
-        log.warning("Backup vaults %s: %s", region, e)
+        log_collector_error("Backup vaults", region, e)
     return rows
 
 
@@ -845,7 +857,158 @@ def collect_backup_plans(session, region):
                 except Exception:
                     pass
     except Exception as e:
-        log.warning("Backup plans %s: %s", region, e)
+        log_collector_error("Backup plans", region, e)
+    return rows
+
+
+def collect_cost_explorer(session):
+    """
+    Collect last two months of AWS spend broken down by service using Cost Explorer.
+    Returns an empty list gracefully if Cost Explorer is not enabled or accessible.
+    """
+    rows = []
+    try:
+        ce = session.client("ce", region_name="us-east-1")
+        today = datetime.date.today()
+        # Current month (partial) and previous full month
+        cur_start  = today.replace(day=1)
+        prev_end   = cur_start
+        prev_start = (cur_start - datetime.timedelta(days=1)).replace(day=1)
+
+        periods = []
+        if prev_start < prev_end:
+            periods.append((str(prev_start), str(prev_end)))
+        if str(cur_start) < str(today):
+            periods.append((str(cur_start), str(today)))
+
+        for p_start, p_end in periods:
+            try:
+                resp = ce.get_cost_and_usage(
+                    TimePeriod={"Start": p_start, "End": p_end},
+                    Granularity="MONTHLY",
+                    Metrics=["UnblendedCost"],
+                    GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}],
+                )
+                for result in resp.get("ResultsByTime", []):
+                    period = result["TimePeriod"]["Start"]
+                    for group in result.get("Groups", []):
+                        svc    = group["Keys"][0]
+                        amount = float(group["Metrics"]["UnblendedCost"]["Amount"])
+                        if amount >= 0.001:
+                            rows.append({
+                                "Period":     period,
+                                "Service":    svc,
+                                "Cost (USD)": round(amount, 4),
+                            })
+            except Exception as e:
+                log.warning("Cost Explorer period %s: %s", p_start, e)
+
+        rows.sort(key=lambda r: (r["Period"], -r["Cost (USD)"]))
+    except Exception as e:
+        log.warning("Cost Explorer: %s", e)
+    return rows
+
+
+def collect_kms(session, region):
+    """List KMS keys with key manager type (Customer-managed vs AWS-managed)."""
+    rows = []
+    try:
+        kms = make_client(session, "kms", region)
+        paginator = kms.get_paginator("list_keys")
+        for page in paginator.paginate():
+            for key in page["Keys"]:
+                try:
+                    meta  = kms.describe_key(KeyId=key["KeyId"])["KeyMetadata"]
+                    state = meta.get("KeyState", "")
+                    if state in ("PendingDeletion", "PendingReplicaDeletion"):
+                        continue
+                    aliases = []
+                    try:
+                        apag = kms.get_paginator("list_aliases")
+                        for ap in apag.paginate(KeyId=key["KeyId"]):
+                            aliases += [a["AliasName"] for a in ap.get("Aliases", [])]
+                    except Exception:
+                        pass
+                    rows.append({
+                        "Region":          region,
+                        "Key ID":          key["KeyId"],
+                        "Alias":           ", ".join(aliases),
+                        "Manager":         meta.get("KeyManager", ""),
+                        "State":           state,
+                        "Spec":            meta.get("KeySpec", ""),
+                        "Usage":           meta.get("KeyUsage", ""),
+                        "Multi-Region":    meta.get("MultiRegion", False),
+                        "Created":         str(meta.get("CreationDate", ""))[:10],
+                    })
+                except Exception:
+                    pass
+    except Exception as e:
+        log_collector_error("KMS", region, e)
+    return rows
+
+
+def collect_secrets_manager(session, region):
+    """List Secrets Manager secrets with rotation and access metadata."""
+    rows = []
+    try:
+        sm = make_client(session, "secretsmanager", region)
+        paginator = sm.get_paginator("list_secrets")
+        for page in paginator.paginate():
+            for s in page["SecretList"]:
+                rows.append({
+                    "Region":           region,
+                    "Name":             s.get("Name", ""),
+                    "Description":      s.get("Description", ""),
+                    "Rotation Enabled": s.get("RotationEnabled", False),
+                    "Rotation Days":    safe_get(s, "RotationRules", "AutomaticallyAfterDays"),
+                    "Last Rotated":     str(s.get("LastRotatedDate",  ""))[:10],
+                    "Last Accessed":    str(s.get("LastAccessedDate", ""))[:10],
+                    "Created":          str(s.get("CreatedDate",      ""))[:10],
+                })
+    except Exception as e:
+        log_collector_error("Secrets Manager", region, e)
+    return rows
+
+
+def collect_sqs(session, region):
+    """List SQS queues with approximate message depth."""
+    rows = []
+    try:
+        sqs = make_client(session, "sqs", region)
+        paginator = sqs.get_paginator("list_queues")
+        for page in paginator.paginate():
+            for url in page.get("QueueUrls", []):
+                name    = url.split("/")[-1]
+                is_fifo = name.endswith(".fifo")
+                msgs = in_flight = created = dlq = ""
+                try:
+                    attrs = sqs.get_queue_attributes(
+                        QueueUrl=url,
+                        AttributeNames=[
+                            "ApproximateNumberOfMessages",
+                            "ApproximateNumberOfMessagesNotVisible",
+                            "CreatedTimestamp",
+                            "RedrivePolicy",
+                        ],
+                    )["Attributes"]
+                    msgs      = int(attrs.get("ApproximateNumberOfMessages", 0))
+                    in_flight = int(attrs.get("ApproximateNumberOfMessagesNotVisible", 0))
+                    ts        = attrs.get("CreatedTimestamp", "")
+                    created   = str(datetime.datetime.fromtimestamp(int(ts)))[:10] if ts else ""
+                    dlq       = "Yes" if attrs.get("RedrivePolicy") else "No"
+                except Exception:
+                    pass
+                rows.append({
+                    "Region":              region,
+                    "Queue Name":          name,
+                    "Type":                "FIFO" if is_fifo else "Standard",
+                    "Messages Available":  msgs,
+                    "Messages In-Flight":  in_flight,
+                    "Dead-Letter Queue":   dlq,
+                    "Created":             created,
+                })
+    except Exception as e:
+        log_collector_error("SQS", region, e)
     return rows
 
 
@@ -885,7 +1048,7 @@ def auto_col_width(ws, min_w=8, max_w=50):
 def freeze_top_row(ws):
     ws.freeze_panes = ws.cell(row=2, column=1)
 
-def add_sheet(wb, name, rows, columns, color_row=None, title=None):
+def add_sheet(wb, name, rows, columns, color_row=None, totals_cols=None, title=None):
     """Generic sheet writer."""
     ws = wb.create_sheet(title=name[:31])
     ws.sheet_properties.tabColor = C_SUMMARY_FILL
@@ -907,6 +1070,21 @@ def add_sheet(wb, name, rows, columns, color_row=None, title=None):
             cell.alignment = Alignment(vertical="center")
             if color_row:
                 color_row(cell, col, row)
+
+    # Optional totals footer row
+    if totals_cols and rows:
+        totals_r = start_row + 1 + len(rows)
+        for j, col in enumerate(columns):
+            c = ws.cell(row=totals_r, column=j+1)
+            if col in totals_cols:
+                c.value = round(sum(r.get(col, 0) or 0 for r in rows), 2)
+            elif j == 0:
+                c.value = "TOTAL"
+            c.fill = hex_fill(C_SUMMARY_FILL)
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.alignment = Alignment(horizontal="center" if j > 0 else "left",
+                                    vertical="center", indent=1 if j == 0 else 0)
+        ws.row_dimensions[totals_r].height = 18
 
     freeze_top_row(ws)
     auto_col_width(ws)
@@ -978,6 +1156,10 @@ def build_summary_sheet(wb, data, account_id, regions, assessed_at):  # noqa: C9
     ec_rows   = data.get("ElastiCache",      [])
     bkv_rows  = data.get("AWS Backup Vaults",[])
     bkp_rows  = data.get("AWS Backup Plans", [])
+    cost_rows = data.get("Cost by Service",  [])
+    kms_rows  = data.get("KMS Keys",         [])
+    sec_rows  = data.get("Secrets Manager",  [])
+    sqs_rows  = data.get("SQS Queues",       [])
 
     def gib_sum(rows, key):
         return round(sum(r.get(key, 0) or 0 for r in rows), 2)
@@ -1034,12 +1216,21 @@ def build_summary_sheet(wb, data, account_id, regions, assessed_at):  # noqa: C9
                      str(r.get("Tag:Backup", "")).lower()
                      not in ("true", "yes", "enabled")]
     rds_no_bk   = [r for r in rds_rows if r.get("Automated Backups") == "No"]
+    rds_short_bk = [r for r in rds_rows
+                    if 0 < (r.get("Backup Retention (days)") or 0) < 7]
     pub_s3      = [r for r in s3_rows
                    if r.get("Public Access") not in ("Blocked", "")]
     no_vers_s3  = [r for r in s3_rows
                    if r.get("Versioning") in ("Disabled", "Suspended", "")]
-    ddb_no_pitr = [r for r in ddb_rows if r.get("PITR Enabled") == "DISABLED"]
-    pub_rds     = [r for r in rds_rows if r.get("Public") is True]
+    ddb_no_pitr      = [r for r in ddb_rows if r.get("PITR Enabled") == "DISABLED"]
+    pub_rds          = [r for r in rds_rows if r.get("Public") is True]
+    no_rot_secrets   = [r for r in sec_rows if not r.get("Rotation Enabled")]
+
+    # EBS snapshot coverage breakdown
+    ebs_no_snap  = sum(1 for r in ebs_rows if r.get("Snapshot Coverage") == "No Snapshot")
+    ebs_stale    = sum(1 for r in ebs_rows if str(r.get("Snapshot Coverage","")).startswith("Stale"))
+    ebs_aging    = sum(1 for r in ebs_rows if str(r.get("Snapshot Coverage","")).startswith("Aging"))
+    ebs_recent   = sum(1 for r in ebs_rows if str(r.get("Snapshot Coverage","")).startswith(("Current","Recent")))
 
     # Region distribution
     from collections import Counter
@@ -1186,6 +1377,90 @@ def build_summary_sheet(wb, data, account_id, regions, assessed_at):  # noqa: C9
             cur_l += 1
         cur_l += 1  # gap between groups
 
+    # ── LEFT: EBS Snapshot Coverage Summary ──────────────────────────────────
+    cur_l = section_header(cur_l, 1, 6, "  EBS Snapshot Coverage")
+
+    snap_cov_hdrs = ["Coverage State", "Volumes", "% of Total", "", "", ""]
+    for ci, h in enumerate(snap_cov_hdrs, 1):
+        c = ws.cell(row=cur_l, column=ci, value=h)
+        if h:
+            c.fill = hex_fill(C_SUBHDR_FILL)
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[cur_l].height = 20
+    cur_l += 1
+
+    total_ebs = len(ebs_rows) or 1
+    snap_cov_data = [
+        ("Current / Recent (≤7d)", ebs_recent,  C_GOOD),
+        ("Aging (8–30d)",          ebs_aging,   C_WARN),
+        ("Stale (>30d)",           ebs_stale,   C_CRITICAL),
+        ("No Snapshot",            ebs_no_snap, C_CRITICAL),
+    ]
+    for i, (label, cnt, bg_color) in enumerate(snap_cov_data):
+        bg = C_ALT_ROW if i % 2 == 0 else None
+        pct = f"{round(cnt / total_ebs * 100)}%" if ebs_rows else "—"
+        for ci, val in enumerate([label, cnt, pct, "", "", ""], 1):
+            c = ws.cell(row=cur_l, column=ci, value=val)
+            if ci == 2 and cnt > 0:
+                c.fill = hex_fill(bg_color)
+                c.font = Font(bold=True, size=9)
+            else:
+                if bg: c.fill = hex_fill(bg)
+                c.font = Font(size=9)
+            c.alignment = Alignment(horizontal="center" if ci > 1 else "left",
+                                    vertical="center", indent=1 if ci == 1 else 0)
+        ws.row_dimensions[cur_l].height = 16
+        cur_l += 1
+
+    cur_l += 1  # spacer
+
+    # ── LEFT: Backup Sizing Summary ───────────────────────────────────────────
+    cur_l = section_header(cur_l, 1, 6, "  Backup Sizing Estimate")
+
+    bkup_sz_hdrs = ["Data Source", "Size (GiB)", "Size (TiB)", "AWS Backup Method", "", ""]
+    for ci, h in enumerate(bkup_sz_hdrs, 1):
+        c = ws.cell(row=cur_l, column=ci, value=h)
+        if h:
+            c.fill = hex_fill(C_SUBHDR_FILL)
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[cur_l].height = 20
+    cur_l += 1
+
+    bkup_sz_data = [
+        ("EBS Volumes",  ebs_gib,  round(ebs_gib/1024, 4),  "AWS Backup / EBS Snapshots"),
+        ("RDS / Aurora", rds_gib,  round(rds_gib/1024, 4),  "AWS Backup / Automated Snapshots"),
+        ("S3 Buckets",   s3_gib,   round(s3_gib/1024, 4),   "S3 Versioning / Replication"),
+        ("EFS",          efs_gib,  round(efs_gib/1024, 4),   "AWS Backup"),
+        ("FSx",          fsx_gib,  round(fsx_gib/1024, 4),   "AWS Backup / FSx Backups"),
+        ("DynamoDB",     ddb_gib,  round(ddb_gib/1024, 4),   "PITR / AWS Backup"),
+        ("WorkSpaces",   ws2_gib,  round(ws2_gib/1024, 4),   "Automatic Snapshots"),
+    ]
+    bkup_total_gib = round(sum(v[1] for v in bkup_sz_data), 2)
+    bkup_total_tib = round(bkup_total_gib / 1024, 4)
+
+    for i, (svc, gib_val, tib_val, method) in enumerate(bkup_sz_data):
+        bg = C_ALT_ROW if i % 2 == 0 else None
+        for ci, val in enumerate([svc, gib_val, tib_val, method, "", ""], 1):
+            c = ws.cell(row=cur_l, column=ci, value=val)
+            if bg: c.fill = hex_fill(bg)
+            c.font = Font(size=9)
+            c.alignment = Alignment(horizontal="center" if ci in (2, 3) else "left",
+                                    vertical="center", indent=1 if ci == 1 else 0)
+        ws.row_dimensions[cur_l].height = 16
+        cur_l += 1
+
+    # Totals
+    for ci, val in enumerate(["TOTAL", bkup_total_gib, bkup_total_tib, "—", "", ""], 1):
+        c = ws.cell(row=cur_l, column=ci, value=val)
+        c.fill = hex_fill(C_SUMMARY_FILL)
+        c.font = Font(bold=True, size=9, color="FFFFFF")
+        c.alignment = Alignment(horizontal="center" if ci in (2, 3) else "left",
+                                vertical="center", indent=1 if ci == 1 else 0)
+    ws.row_dimensions[cur_l].height = 18
+    cur_l += 2  # spacer
+
     # ── RIGHT: Risk & Findings ────────────────────────────────────────────────
     cur_r = section_header(cur_r, 7, 12, "  Risk & Findings")
 
@@ -1196,16 +1471,24 @@ def build_summary_sheet(wb, data, account_id, regions, assessed_at):  # noqa: C9
          f"{len(pub_s3)} bucket(s) not fully blocking public access"),
         ("CRITICAL", "Publicly Accessible RDS",         len(pub_rds),
          f"{len(pub_rds)} DB instance(s) exposed to internet"),
+        ("CRITICAL", "EBS Volumes Without Snapshots",   ebs_no_snap,
+         f"{ebs_no_snap} volume(s) have no snapshot — unrecoverable on failure"),
         ("HIGH",     "EC2 Without Backup Tag",          len(no_backup_ec2),
          f"{len(no_backup_ec2)} instance(s) missing backup=true tag"),
         ("HIGH",     "RDS Without Automated Backup",    len(rds_no_bk),
          f"{len(rds_no_bk)} DB(s) with 0-day retention — no recovery point"),
+        ("HIGH",     "RDS Retention < 7 Days",          len(rds_short_bk),
+         f"{len(rds_short_bk)} DB(s) with short retention — limited recovery window"),
         ("HIGH",     "DynamoDB Without PITR",           len(ddb_no_pitr),
          f"{len(ddb_no_pitr)} table(s) cannot recover to point-in-time"),
         ("MEDIUM",   "S3 Buckets Without Versioning",   len(no_vers_s3),
          f"{len(no_vers_s3)} bucket(s) — accidental delete is unrecoverable"),
         ("MEDIUM",   "Unattached EBS Volumes",          len(unatt_ebs),
          f"{len(unatt_ebs)} volume(s) not in use — cost waste + backup gap"),
+        ("MEDIUM",   "EBS Volumes With Stale Snapshots", ebs_stale,
+         f"{ebs_stale} volume(s) last snapshot >30 days old"),
+        ("MEDIUM",   "Secrets Without Rotation",        len(no_rot_secrets),
+         f"{len(no_rot_secrets)} secret(s) with no automatic rotation configured"),
     ]
 
     risk_hdr = ["Severity", "Finding", "Count", "Detail"]
@@ -1324,6 +1607,92 @@ def build_summary_sheet(wb, data, account_id, regions, assessed_at):  # noqa: C9
         ws.row_dimensions[cur_r].height = 15
         cur_r += 1
 
+    # ── RIGHT: Cost & Usage ───────────────────────────────────────────────────
+    cur_r += 1
+    cur_r = section_header(cur_r, 7, 12, "  Cost & Usage (Last 2 Months)")
+
+    if cost_rows:
+        # Aggregate by service across all periods, show most recent period totals
+        from collections import defaultdict as _dd
+        latest_period = max(r["Period"] for r in cost_rows)
+        latest_costs  = [r for r in cost_rows if r["Period"] == latest_period]
+        latest_costs.sort(key=lambda r: -r["Cost (USD)"])
+
+        total_month_cost = round(sum(r["Cost (USD)"] for r in latest_costs), 2)
+
+        for ci, h in enumerate(["Service", f"Cost USD ({latest_period[:7]})", "Share", "", "", ""], 7):
+            c = ws.cell(row=cur_r, column=ci, value=h)
+            if h:
+                c.fill = hex_fill(C_SUBHDR_FILL)
+                c.font = Font(bold=True, size=9, color="FFFFFF")
+                c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[cur_r].height = 20
+        cur_r += 1
+
+        for i, row in enumerate(latest_costs[:12]):
+            bg = C_ALT_ROW if i % 2 == 0 else None
+            pct_val = round(row["Cost (USD)"] / max(total_month_cost, 0.001) * 100)
+            bar = "█" * min(14, round(row["Cost (USD)"] / max(total_month_cost, 0.001) * 14))
+            for ci, val in zip(range(7, 13), [row["Service"], f"${row['Cost (USD)']:,.2f}", f"{pct_val}%", bar, "", ""]):
+                c = ws.cell(row=cur_r, column=ci, value=val)
+                if bg: c.fill = hex_fill(bg)
+                c.font = Font(size=9, color="2471A3" if ci == 10 else "000000")
+                c.alignment = Alignment(horizontal="left" if ci in (7, 10) else "center",
+                                        vertical="center")
+            ws.row_dimensions[cur_r].height = 15
+            cur_r += 1
+
+        # Total row
+        for ci, val in zip(range(7, 13), [f"TOTAL ({latest_period[:7]})", f"${total_month_cost:,.2f}", "100%", "", "", ""]):
+            c = ws.cell(row=cur_r, column=ci, value=val)
+            c.fill = hex_fill(C_SUMMARY_FILL)
+            c.font = Font(bold=True, size=9, color="FFFFFF")
+            c.alignment = Alignment(horizontal="center" if ci > 7 else "left",
+                                    vertical="center", indent=1 if ci == 7 else 0)
+        ws.row_dimensions[cur_r].height = 18
+        cur_r += 1
+    else:
+        for ci in range(7, 13):
+            c = ws.cell(row=cur_r, column=ci,
+                        value="Cost Explorer not available (requires ce:GetCostAndUsage)" if ci == 7 else "")
+            c.font = Font(size=9, italic=True, color="888888")
+        ws.row_dimensions[cur_r].height = 16
+        cur_r += 1
+
+    # ── RIGHT: Security Assets ────────────────────────────────────────────────
+    cur_r += 1
+    cur_r = section_header(cur_r, 7, 12, "  Security Assets")
+
+    kms_customer = sum(1 for r in kms_rows if r.get("Manager") == "CUSTOMER")
+    kms_aws      = sum(1 for r in kms_rows if r.get("Manager") != "CUSTOMER")
+    sec_with_rot = sum(1 for r in sec_rows if r.get("Rotation Enabled"))
+
+    sec_asset_data = [
+        ("KMS Keys (Total)",          len(kms_rows),       ""),
+        ("  — Customer Managed",       kms_customer,        "CMKs you control"),
+        ("  — AWS Managed",            kms_aws,             "Service-managed keys"),
+        ("Secrets Manager Secrets",    len(sec_rows),       ""),
+        ("  — With Auto-Rotation",     sec_with_rot,        ""),
+        ("  — Without Rotation",       len(no_rot_secrets), "MEDIUM risk — manual rotation only"),
+        ("SQS Queues",                 len(sqs_rows),       ""),
+    ]
+
+    for i, (label, val, note) in enumerate(sec_asset_data):
+        bg = C_ALT_ROW if i % 2 == 0 else None
+        is_risk = "risk" in note.lower()
+        for ci, v in zip(range(7, 13), [label, val, note, "", "", ""]):
+            c = ws.cell(row=cur_r, column=ci, value=v)
+            if ci == 2 and is_risk and isinstance(val, int) and val > 0:
+                c.fill = hex_fill(C_WARN)
+            elif bg:
+                c.fill = hex_fill(bg)
+            c.font = Font(size=9, bold=(ci == 7 and not label.startswith(" ")),
+                          color="C0392B" if (is_risk and ci == 8 and isinstance(val, int) and val > 0) else "000000")
+            c.alignment = Alignment(horizontal="left" if ci in (7, 9) else "center",
+                                    vertical="center", indent=1 if ci == 7 else 0)
+        ws.row_dimensions[cur_r].height = 16
+        cur_r += 1
+
     # ── Column widths ─────────────────────────────────────────────────────────
     widths = {
         1: 18, 2: 8, 3: 14, 4: 14, 5: 12, 6: 22,
@@ -1356,6 +1725,9 @@ def collect_region(session, region, account_id):
         ("ElastiCache",     lambda: collect_elasticache(session, region)),
         ("AWS Backup Vaults",  lambda: collect_aws_backup(session, region)),
         ("AWS Backup Plans",   lambda: collect_backup_plans(session, region)),
+        ("KMS Keys",           lambda: collect_kms(session, region)),
+        ("Secrets Manager",    lambda: collect_secrets_manager(session, region)),
+        ("SQS Queues",         lambda: collect_sqs(session, region)),
     ]
     for name, fn in collectors:
         try:
@@ -1384,7 +1756,7 @@ SHEET_COLS = {
     "EBS Volumes": [
         "Region", "Volume ID", "Name", "State", "Type", "Size (GiB)", "IOPS",
         "Throughput", "Encrypted", "Multi-Attach", "AZ", "Attached To",
-        "Snapshot ID", "Created",
+        "Snapshot ID", "Snapshot Coverage", "Created",
     ],
     "EBS Snapshots": [
         "Region", "Snapshot ID", "Name", "Volume ID", "State", "Size (GiB)",
@@ -1459,6 +1831,21 @@ SHEET_COLS = {
         "Start Window (min)", "Completion Window (min)", "Delete After (days)",
         "Cold After (days)", "Copy To Region", "Created",
     ],
+    "Cost by Service": [
+        "Period", "Service", "Cost (USD)",
+    ],
+    "KMS Keys": [
+        "Region", "Key ID", "Alias", "Manager", "State", "Spec", "Usage",
+        "Multi-Region", "Created",
+    ],
+    "Secrets Manager": [
+        "Region", "Name", "Description", "Rotation Enabled", "Rotation Days",
+        "Last Rotated", "Last Accessed", "Created",
+    ],
+    "SQS Queues": [
+        "Region", "Queue Name", "Type", "Messages Available",
+        "Messages In-Flight", "Dead-Letter Queue", "Created",
+    ],
 }
 
 
@@ -1473,13 +1860,36 @@ def ec2_color_row(cell, col, row):
             cell.fill = hex_fill(C_CRITICAL)
 
 
+def ebs_color_row(cell, col, row):
+    if col == "State" and row.get("State") == "available":
+        cell.fill = hex_fill(C_WARN)        # unattached
+    if col == "Encrypted" and not row.get("Encrypted"):
+        cell.fill = hex_fill(C_CRITICAL)
+    if col == "Snapshot Coverage":
+        cov = row.get("Snapshot Coverage", "")
+        if cov == "No Snapshot":
+            cell.fill = hex_fill(C_CRITICAL)
+        elif cov.startswith("Stale"):
+            cell.fill = hex_fill(C_CRITICAL)
+        elif cov.startswith("Aging"):
+            cell.fill = hex_fill(C_WARN)
+        elif cov.startswith(("Current", "Recent")):
+            cell.fill = hex_fill(C_GOOD)
+
+
 def rds_color_row(cell, col, row):
     if col == "Automated Backups" and row.get("Automated Backups") == "No":
         cell.fill = hex_fill(C_CRITICAL)
-    if col == "Backup Retention (days)" and (row.get("Backup Retention (days)") or 0) == 0:
-        cell.fill = hex_fill(C_CRITICAL)
+    if col == "Backup Retention (days)":
+        ret = row.get("Backup Retention (days)") or 0
+        if ret == 0:
+            cell.fill = hex_fill(C_CRITICAL)
+        elif ret < 7:
+            cell.fill = hex_fill(C_WARN)
     if col == "Multi-AZ" and not row.get("Multi-AZ"):
         cell.fill = hex_fill(C_WARN)
+    if col == "Public" and row.get("Public") is True:
+        cell.fill = hex_fill(C_CRITICAL)
 
 
 def s3_color_row(cell, col, row):
@@ -1489,26 +1899,91 @@ def s3_color_row(cell, col, row):
         cell.fill = hex_fill(C_WARN)
 
 
+def secrets_color_row(cell, col, row):
+    if col == "Rotation Enabled" and not row.get("Rotation Enabled"):
+        cell.fill = hex_fill(C_WARN)
+
+def cost_color_row(cell, col, row):
+    if col == "Cost (USD)":
+        val = row.get("Cost (USD)", 0) or 0
+        if val >= 1000:
+            cell.fill = hex_fill(C_CRITICAL)
+        elif val >= 100:
+            cell.fill = hex_fill(C_WARN)
+
 COLOR_FUNCS = {
-    "EC2 Instances": ec2_color_row,
-    "RDS & Aurora":  rds_color_row,
-    "S3 Buckets":    s3_color_row,
+    "EC2 Instances":  ec2_color_row,
+    "EBS Volumes":    ebs_color_row,
+    "RDS & Aurora":   rds_color_row,
+    "S3 Buckets":     s3_color_row,
+    "Secrets Manager": secrets_color_row,
+    "Cost by Service": cost_color_row,
+}
+
+# Columns to sum in the totals footer row (sheet name -> list of numeric cols)
+TOTALS_COLS = {
+    "EBS Volumes":    ["Size (GiB)"],
+    "S3 Buckets":     ["Size (MiB)", "Size (GiB)", "Size (TiB)", "Object Count"],
+    "RDS & Aurora":   ["Allocated Storage (GiB)"],
+    "Cost by Service": ["Cost (USD)"],
 }
 
 
+def _add_ebs_snapshot_coverage(data):
+    """
+    Cross-reference EBS snapshots against EBS volumes and add a
+    'Snapshot Coverage' column to every volume row.
+    """
+    # Build: volume_id -> list of snapshot ages in days
+    snap_ages = defaultdict(list)
+    today = datetime.date.today()
+    for snap in data.get("EBS Snapshots", []):
+        vol_id = snap.get("Volume ID", "")
+        start  = snap.get("Start Time", "")
+        if not vol_id or not start:
+            continue
+        try:
+            snap_date = datetime.date.fromisoformat(str(start)[:10])
+            age = (today - snap_date).days
+            snap_ages[vol_id].append(age)
+        except (ValueError, TypeError):
+            pass
+
+    for vol in data.get("EBS Volumes", []):
+        vol_id = vol.get("Volume ID", "")
+        ages   = snap_ages.get(vol_id, [])
+        if not ages:
+            vol["Snapshot Coverage"] = "No Snapshot"
+        else:
+            newest = min(ages)
+            if newest <= 1:
+                vol["Snapshot Coverage"] = f"Current ({newest}d)"
+            elif newest <= 7:
+                vol["Snapshot Coverage"] = f"Recent ({newest}d)"
+            elif newest <= 30:
+                vol["Snapshot Coverage"] = f"Aging ({newest}d)"
+            else:
+                vol["Snapshot Coverage"] = f"Stale ({newest}d)"
+
+
 def build_workbook(data, account_id, regions, assessed_at, output_path):
+    # Post-processing
+    _add_ebs_snapshot_coverage(data)
+
     wb = openpyxl.Workbook()
     build_summary_sheet(wb, data, account_id, regions, assessed_at)
 
     for sheet_name, columns in SHEET_COLS.items():
         rows = data.get(sheet_name, [])
         color_fn = COLOR_FUNCS.get(sheet_name)
+        totals = TOTALS_COLS.get(sheet_name)
         add_sheet(
             wb,
             name=sheet_name,
             rows=rows,
             columns=columns,
             color_row=color_fn,
+            totals_cols=totals,
             title=f"{sheet_name}  ({len(rows)} resources)",
         )
 
@@ -1583,6 +2058,10 @@ def main():
     print("\nCollecting S3 (global)...")
     s3_data = collect_s3(session)
 
+    # Cost Explorer is global — collect once
+    print("Collecting Cost Explorer (global)...")
+    cost_data = collect_cost_explorer(session)
+
     # Patch: skip snapshots if requested
     if args.skip_snapshots:
         SHEET_COLS.pop("EBS Snapshots", None)
@@ -1606,7 +2085,8 @@ def main():
 
     # Merge
     data = merge_results(all_results)
-    data["S3 Buckets"] = s3_data
+    data["S3 Buckets"]     = s3_data
+    data["Cost by Service"] = cost_data
 
     # Output path — strip any directory components to prevent path traversal
     import os as _os
